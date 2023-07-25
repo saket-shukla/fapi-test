@@ -1,11 +1,11 @@
-import uvicorn
 import uuid
+import uvicorn
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Body, Header, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from pydantic import BaseModel, EmailStr, validator
 
 SECRET_KEY = "nsjnjna3289sjnjansjnjnndsjnajnjdnasn"
 ALGORITHM = "HS256"
@@ -19,7 +19,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 pwd_context = CryptContext(schemes=['bcrypt'], deprecated='auto')
 
 
-### In Memory Storage
+# Dependencies
 
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
@@ -28,11 +28,16 @@ def verify_password(plain_password, hashed_password):
 def get_password_hash(password):
     return pwd_context.hash(password)
 
+
 def get_user(db, email: str):
     for user_entry in db:
         if user_entry['email'] == email:
             return User(**user_entry)
     return None
+
+
+# In Memory Storage
+
 
 users_data = [{
     "id": uuid.uuid4(),
@@ -43,26 +48,51 @@ users_data = [{
 posts_data = []
 
 
-### Schema
+# Schema
 
 
 class Token(BaseModel):
     access_token: str
     token_type: str
-    
-    
+
+
 class TokenData(BaseModel):
     email: str | None = None
-    
+
 
 class User(BaseModel):
     id: uuid.UUID
     email: EmailStr
     password: str
     
-    
+    @validator('password', always=True)
+    def validate_password1(cls, value):
+        password = value.get_secret_value()
+        min_length = 8
+        errors = ''
+        if len(password) < min_length:
+            errors += 'Password must be at least 8 characters long. '
+        if not any(character.islower() for character in password):
+            errors += 'Password should contain at least one lowercase character. '
+        if not any(character.isupper() for character in password):
+            errors += 'Password should contain at least one uppercase character. '
+        if errors:
+            raise ValueError(errors)
+            
+        return value
 
-    
+
+class Post(BaseModel):
+    id: uuid.UUID
+    text: str
+    author: uuid.UUID
+
+
+class PostIn(BaseModel):
+    text: str
+
+
+# Dependencies on Models
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
@@ -92,7 +122,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     user = get_user(users_data, email=token_data.email)
     if user is None:
         raise credentials_exception
-    return user   
+    return user
+
 
 def authenticate_user(fake_db, email: str, password: str):
     user = get_user(fake_db, email)
@@ -101,28 +132,28 @@ def authenticate_user(fake_db, email: str, password: str):
     if not verify_password(password, user.password):
         return False
     return user
-    
-class Post(BaseModel):
-    id: uuid.UUID
-    text: str
-    author: uuid.UUID
-    
-class PostIn(BaseModel):
-    text: str
 
 
-### Auth Routes
+# Auth Routes
 @app.post('/signup')
 def signup_user(
-        email: str =Body(..., min_length=5, max_length=255), 
-        password: str=Body(..., min_length=8)
-    ):
+    email: str = Body(..., min_length=5, max_length=255),
+    password: str = Body(..., min_length=8)
+):
     new_user = User(
         id=uuid.uuid4(),
-        email=email, 
+        email=email,
         password=get_password_hash(password)
     )
     # Check user exists
+    user_exists = get_user(users_data, email)
+    if user_exists:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User already exists",
+            headers={"WWW-Authenticate": "Bearer"},
+
+        )
     # Create user
     users_data.append(new_user.dict())
     # Return Token
@@ -131,12 +162,13 @@ def signup_user(
         data={"sub": new_user.email}, expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer"}
-    
+
+
 @app.post('/login')
 def login_user(
-        email: str =Body(..., min_length=5, max_length=255), 
-        password: str=Body(..., min_length=8)
-    ):
+    email: str = Body(..., min_length=5, max_length=255),
+    password: str = Body(..., min_length=8)
+):
     # Authenticate user
     user = authenticate_user(users_data, email, password)
     if not user:
@@ -153,14 +185,14 @@ def login_user(
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-### Data Routes
+# Data Routes
 
 
 @app.post('/addPost')
 def create_user_post(
-        post_input: PostIn = Body(...),
-        current_user: User | None = Depends(get_current_user)
-    ):
+    post_input: PostIn = Body(...),
+    current_user: User | None = Depends(get_current_user)
+):
     # Generate new id and Assign User
     new_post = Post(
         id=uuid.uuid4(),
@@ -175,14 +207,15 @@ def create_user_post(
 
 @app.get('/getPosts')
 def get_user_posts(
-        current_user: User | None = Depends(get_current_user)
-    ):
+    current_user: User | None = Depends(get_current_user)
+):
     # Get all posts, Filter posts for only current user and Return posts list
-    user_posts = list(filter(lambda post_entry: post_entry['author'] == current_user , posts_data))
+    user_posts = list(
+        filter(lambda post_entry: post_entry['author'] == current_user.id, posts_data))
     return {"posts": user_posts}
 
 
-### Debugging setup
+# Debugging setup
 
 
 if __name__ == '__main__':
