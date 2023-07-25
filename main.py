@@ -43,9 +43,6 @@ class User(BaseModel):
     password: str
     
     
-class UserInDB(User):
-    hashed_password: str
-    
 pwd_context = CryptContext(schemes=['bcrypt'], deprecated='auto')
 
     
@@ -96,7 +93,7 @@ def authenticate_user(fake_db, email: str, password: str):
     user = get_user(fake_db, email)
     if not user:
         return False
-    if not verify_password(password, user.hashed_password):
+    if not verify_password(password, user.password):
         return False
     return user
     
@@ -109,18 +106,6 @@ class PostIn(BaseModel):
     text: str
 
 
-### Dependencies
-
-async def get_current_user(token: str = Depends(oauth2_scheme)):
-    # Check Authentication
-    current_user = None
-    # Get current user
-    if users_data.length:
-        current_user = users_data[0]
-    return current_user
-    
-
-
 ### Auth Routes
 @app.post('/signup')
 def signup_user(
@@ -130,7 +115,7 @@ def signup_user(
     new_user = User(
         id=uuid.uuid4(),
         email=email, 
-        password=password
+        password=get_password_hash(password)
     )
     # Check user exists
     # Create user
