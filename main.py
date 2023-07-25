@@ -1,9 +1,20 @@
 import uvicorn
 import uuid
-from fastapi import FastAPI, Body, Header
+from datetime import datetime, timedelta
+from fastapi import FastAPI, Body, Header, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
+from fastapi.security import OAuth2PasswordBearer
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+
+SECRET_KEY = "nsjnjna3289sjnjansjnjnndsjnajnjdnasn"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
 
 app = FastAPI()
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
 ### In Memory Storage
@@ -16,31 +27,98 @@ posts_data = []
 
 ### Schema
 
-class user(BaseModel):
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    
+    
+class TokenData(BaseModel):
+    email: str | None = None
+    
+
+class User(BaseModel):
     id: uuid.UUID
     email: EmailStr
     password: str
     
-class post(BaseModel):
+    
+class UserInDB(User):
+    hashed_password: str
+    
+pwd_context = CryptContext(schemes=['bcrypt'], deprecated='auto')
+
+    
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def get_user(db, email: str):
+    for user_entry in db:
+        if user_entry['email'] == email:
+            return User(**user_entry)
+    return None
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+        token_data = TokenData(email=email)
+    except JWTError:
+        raise credentials_exception
+    user = get_user(users_data, email=token_data.email)
+    if user is None:
+        raise credentials_exception
+    return user   
+
+def authenticate_user(fake_db, email: str, password: str):
+    user = get_user(fake_db, email)
+    if not user:
+        return False
+    if not verify_password(password, user.hashed_password):
+        return False
+    return user
+    
+class Post(BaseModel):
     id: uuid.UUID
     text: str
     author: str
     
-class post_in(BaseModel):
+class PostIn(BaseModel):
     text: str
 
 
 ### Dependencies
-def process_auth_input(
-        email: str =Body(..., min_length=5, max_length=255), 
-        password: str=Body(..., min_length=8)
-    ):
-    return {email, password}
 
-def check_authenticated_user():
-    # Validate token from header
-    # Implement Dependency in route
-    return True
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    # Check Authentication
+    current_user = None
+    # Get current user
+    if users_data.length:
+        current_user = users_data[0]
+    return current_user
+    
 
 
 ### Auth Routes
@@ -49,7 +127,7 @@ def signup_user(
         email: str =Body(..., min_length=5, max_length=255), 
         password: str=Body(..., min_length=8)
     ):
-    new_user = user(
+    new_user = User(
         id=uuid.uuid4(),
         email=email, 
         password=password
@@ -57,20 +135,32 @@ def signup_user(
     # Check user exists
     # Create user
     users_data.append(new_user.dict())
-    # Authenticate user
     # Return Token
-    pass
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": new_user.email}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
     
 @app.post('/login')
 def login_user(
         email: str =Body(..., min_length=5, max_length=255), 
         password: str=Body(..., min_length=8)
     ):
-    # Check email
-    # Check password
     # Authenticate user
+    user = authenticate_user(users_data, email, password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     # Return Token
-    pass
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user['email']}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
 
 
 ### Data Routes
@@ -78,13 +168,11 @@ def login_user(
 
 @app.post('/addPost')
 def create_user_post(
-        post_input: post_in = Body(...)
+        post_input: PostIn = Body(...),
+        current_user: User | None = Depends(get_current_user)
     ):
-    # Check authentication
-    # Get current user
-    current_user = ""
     # Generate new id and Assign User
-    new_post = post(
+    new_post = Post(
         id=uuid.uuid4(),
         text=post_input.text,
         author=current_user
@@ -96,10 +184,9 @@ def create_user_post(
 
 
 @app.get('/getPosts')
-def get_user_posts():
-    # Check authentication
-    # Get current user
-    current_user = ""
+def get_user_posts(
+        current_user: User | None = Depends(get_current_user)
+    ):
     # Get all posts, Filter posts for only current user and Return posts list
     user_posts = list(filter(lambda post_entry: post_entry['author'] == current_user , posts_data))
     return {"posts": user_posts}
