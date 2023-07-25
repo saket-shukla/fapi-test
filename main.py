@@ -16,11 +16,29 @@ app = FastAPI()
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
+pwd_context = CryptContext(schemes=['bcrypt'], deprecated='auto')
+
 
 ### In Memory Storage
 
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
 
-users_data = []
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def get_user(db, email: str):
+    for user_entry in db:
+        if user_entry['email'] == email:
+            return User(**user_entry)
+    return None
+
+users_data = [{
+    "id": uuid.uuid4(),
+    "password": get_password_hash("qwerty1234"),
+    "email": "saket@assystant.com"
+}]
 
 posts_data = []
 
@@ -43,21 +61,8 @@ class User(BaseModel):
     password: str
     
     
-pwd_context = CryptContext(schemes=['bcrypt'], deprecated='auto')
 
     
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-def get_password_hash(password):
-    return pwd_context.hash(password)
-
-def get_user(db, email: str):
-    for user_entry in db:
-        if user_entry['email'] == email:
-            return User(**user_entry)
-    return None
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
@@ -100,7 +105,7 @@ def authenticate_user(fake_db, email: str, password: str):
 class Post(BaseModel):
     id: uuid.UUID
     text: str
-    author: str
+    author: uuid.UUID
     
 class PostIn(BaseModel):
     text: str
@@ -143,7 +148,7 @@ def login_user(
     # Return Token
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user['email']}, expires_delta=access_token_expires
+        data={"sub": user.email}, expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
@@ -160,7 +165,7 @@ def create_user_post(
     new_post = Post(
         id=uuid.uuid4(),
         text=post_input.text,
-        author=current_user
+        author=current_user.id
     )
     # Store post in memory
     posts_data.append(new_post.dict())
