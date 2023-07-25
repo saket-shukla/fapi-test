@@ -65,9 +65,13 @@ class User(BaseModel):
     email: EmailStr
     password: str
     
+
+class UserIn(BaseModel):
+    email: EmailStr
+    password: str
     @validator('password', always=True)
-    def validate_password1(cls, value):
-        password = value.get_secret_value()
+    def validate_password(cls, value):
+        password = value
         min_length = 8
         errors = ''
         if len(password) < min_length:
@@ -80,7 +84,6 @@ class User(BaseModel):
             raise ValueError(errors)
             
         return value
-
 
 class Post(BaseModel):
     id: uuid.UUID
@@ -136,17 +139,14 @@ def authenticate_user(fake_db, email: str, password: str):
 
 # Auth Routes
 @app.post('/signup')
-def signup_user(
-    email: str = Body(..., min_length=5, max_length=255),
-    password: str = Body(..., min_length=8)
-):
+def signup_user(user_input: UserIn):
     new_user = User(
         id=uuid.uuid4(),
-        email=email,
-        password=get_password_hash(password)
+        email=user_input.email,
+        password=get_password_hash(user_input.password)
     )
     # Check user exists
-    user_exists = get_user(users_data, email)
+    user_exists = get_user(users_data, user_input.email)
     if user_exists:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -165,12 +165,9 @@ def signup_user(
 
 
 @app.post('/login')
-def login_user(
-    email: str = Body(..., min_length=5, max_length=255),
-    password: str = Body(..., min_length=8)
-):
+def login_user(user_input: UserIn):
     # Authenticate user
-    user = authenticate_user(users_data, email, password)
+    user = authenticate_user(users_data, user_input.email, user_input.password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
